@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import warnings
 import time
-import psutil  # New import to track running processes
+import psutil
 
 # Suppress warnings and macOS Tk deprecation message
 os.environ["TK_SILENCE_DEPRECATION"] = "1"
@@ -23,42 +23,65 @@ def select_file():
 
 def convert_to_wav(input_file):
     output_file = os.path.splitext(input_file)[0] + "_16khz.wav"
+    
     print(f"🎵 Converting {input_file} to 16kHz WAV format...")
+    
     convert_cmd = [
-        "ffmpeg", "-i", input_file,
+        "ffmpeg", "-y",  # `-y` forces overwrite of existing files
+        "-i", input_file,
         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", output_file
     ]
+    
     subprocess.run(convert_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print("✅ Conversion complete.")
+    
     return output_file
 
 def transcribe(file_path, language):
     output_transcript = os.path.splitext(file_path)[0] + "_transcription.txt"
     print(f"📝 Transcribing {file_path} in {language}...")
 
-    # Start the transcription in Terminal
-    whisper_cmd = f'''
-    osascript -e 'tell application "Terminal" to do script "whisper-cli -m ~/.whisper/medium.bin -l {language} -t 8 \\"{file_path}\\" | tee \\"{output_transcript}\\" "'
-    '''
-    process = subprocess.Popen(whisper_cmd, shell=True)
+    # Get all existing whisper-cli PIDs BEFORE starting a new process
+    existing_pids = get_whisper_pids()
 
-    # Show a loading state while the process is running
+    # Corrected osascript command with proper escaping
+    whisper_cmd = f'osascript -e \'tell application "Terminal" to do script "whisper-cli -m ~/.whisper/medium.bin -l {language} -t 8 \\"{file_path}\\" | tee \\"{output_transcript}\\""\''
+
+    # Start transcription in a new Terminal window
+    subprocess.Popen(whisper_cmd, shell=True)
+
+    # Wait a bit to allow the new process to start
+    time.sleep(2)
+
+    # Get new whisper-cli PIDs AFTER starting process
+    new_pids = get_whisper_pids()
+
+    # Determine the new Whisper process PID
+    whisper_pid = list(set(new_pids) - set(existing_pids))
+    
+    if whisper_pid:
+        whisper_pid = whisper_pid[0]  # Extract single PID
+        print(f"🔄 Monitoring whisper process (PID: {whisper_pid})...")
+    else:
+        print("⚠️ Could not determine whisper process ID. Waiting based on output file.")
+
+    # Monitor the Whisper process
     print("⏳ Transcription in progress...", end="", flush=True)
     
-    # Wait for the whisper-cli process to finish
-    while is_whisper_running():
+    while whisper_pid and is_process_running(whisper_pid):
         print(".", end="", flush=True)
-        time.sleep(2)  # Wait and re-check
+        time.sleep(3)
 
     print("\n✅ Transcription finished.")
     return output_transcript
 
-def is_whisper_running():
-    """Check if whisper-cli is still running."""
-    for process in psutil.process_iter(attrs=['pid', 'name']):
-        if "whisper-cli" in process.info['name']:
-            return True  # Process is still running
-    return False  # Done
+def get_whisper_pids():
+    """Return a list of all running whisper-cli process PIDs."""
+    return [p.info['pid'] for p in psutil.process_iter(attrs=['pid', 'name']) if "whisper-cli" in p.info['name']]
+
+def is_process_running(pid):
+    """Check if a process with a given PID is still running."""
+    return psutil.pid_exists(pid)
 
 def highlight_finder(file_path):
     print("📂 Highlighting transcript in Finder...")
